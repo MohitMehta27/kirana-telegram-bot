@@ -1,7 +1,9 @@
 """Application settings loaded from .env"""
 
 from functools import lru_cache
+from urllib.parse import quote_plus, urlparse
 
+from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -12,7 +14,8 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
-    # MySQL
+    # MySQL — set DB_* OR Railway's MYSQL_URL (from Connect → Private Network)
+    mysql_url: str = ""
     db_host: str = "localhost"
     db_port: int = 3306
     db_user: str = "root"
@@ -21,7 +24,7 @@ class Settings(BaseSettings):
 
     # Telegram
     telegram_bot_token: str = ""
-    public_base_url: str = ""  # e.g. https://xxx.ngrok-free.app
+    public_base_url: str = ""  # only needed for webhook mode
 
     # Gemini (free via Google AI Studio)
     gemini_api_key: str = ""
@@ -47,10 +50,27 @@ class Settings(BaseSettings):
     scheduler_enabled: bool = True
     report_timezone: str = "Asia/Kolkata"
 
+    @model_validator(mode="after")
+    def _apply_mysql_url(self):
+        raw = (self.mysql_url or "").strip()
+        if not raw:
+            return self
+        # Railway gives mysql://... — SQLAlchemy needs mysql+pymysql://
+        parsed = urlparse(raw.replace("mysql://", "mysql+pymysql://", 1))
+        if parsed.hostname:
+            self.db_host = parsed.hostname
+        if parsed.port:
+            self.db_port = parsed.port
+        if parsed.username:
+            self.db_user = parsed.username
+        if parsed.password is not None:
+            self.db_password = parsed.password
+        if parsed.path and parsed.path.strip("/"):
+            self.db_name = parsed.path.strip("/").split("/")[0]
+        return self
+
     @property
     def database_url(self) -> str:
-        from urllib.parse import quote_plus
-
         user = quote_plus(self.db_user)
         password = quote_plus(self.db_password)
         return (
