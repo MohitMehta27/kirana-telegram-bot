@@ -1,0 +1,12 @@
+logs/
+.env
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+generated/*
+!generated/.gitkeep
+*.log
+.DS_Store
+.idea/
+.vscode/
