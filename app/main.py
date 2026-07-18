@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -14,6 +15,7 @@ from app.logging_setup import setup_logging
 logger = logging.getLogger(__name__)
 
 telegram_app = None  # set in lifespan
+_telegram_task: asyncio.Task | None = None
 
 
 def _register_reports(app) -> None:
@@ -26,27 +28,22 @@ def _register_reports(app) -> None:
         logger.exception("scheduler_register_failed")
 
 
-@asynccontextmanager
-async def lifespan(app: FastAPI):
+async def _start_telegram() -> None:
+    """Run Telegram init off the critical path so /health can answer Railway quickly."""
     global telegram_app
     settings = get_settings()
-    setup_logging(log_dir=settings.log_dir, retention_days=settings.log_retention_days)
-    Path(settings.generated_dir).mkdir(parents=True, exist_ok=True)
-
-    logger.info(
-        "startup env=%s db=%s@%s:%s model=%s telegram_mode=%s",
-        settings.app_env,
-        settings.db_name,
-        settings.db_host,
-        settings.db_port,
-        settings.gemini_model,
-        settings.telegram_mode,
-    )
+    if not settings.telegram_bot_token:
+        logger.error("TELEGRAM_BOT_TOKEN missing — set it in Railway Variables")
+        return
 
     from app.telegram.bot import build_application
-    import asyncio
 
-    telegram_app = build_application()
+    try:
+        telegram_app = build_application()
+    except Exception:
+        logger.exception("telegram_build_failed")
+        telegram_app = None
+        return
 
     last_err: Exception | None = None
     for attempt in range(1, 4):
@@ -61,30 +58,62 @@ async def lifespan(app: FastAPI):
             last_err = e
             logger.warning("telegram_initialize_failed attempt=%s err=%s", attempt, e)
             await asyncio.sleep(2 * attempt)
+
     if last_err:
         logger.error(
-            "telegram_unreachable — health API will still run; fix network to api.telegram.org: %s",
+            "telegram_unreachable — health API is up; fix token/network: %s",
             last_err,
         )
         telegram_app = None
-    elif settings.telegram_mode == "polling":
+        return
+
+    if settings.telegram_mode == "polling":
         await telegram_app.start()
         await telegram_app.updater.start_polling(drop_pending_updates=True)
         logger.info("telegram_polling_started")
         _register_reports(telegram_app)
-    else:
-        if not settings.public_base_url:
-            logger.error("webhook mode needs PUBLIC_BASE_URL")
-        else:
-            await telegram_app.start()
-            webhook_url = settings.public_base_url.rstrip("/") + "/telegram/webhook"
-            await telegram_app.bot.set_webhook(url=webhook_url)
-            logger.info("telegram_webhook_set url=%s", webhook_url)
-            _register_reports(telegram_app)
+        return
+
+    if not settings.public_base_url:
+        logger.error("webhook mode needs PUBLIC_BASE_URL")
+        return
+
+    await telegram_app.start()
+    webhook_url = settings.public_base_url.rstrip("/") + "/telegram/webhook"
+    await telegram_app.bot.set_webhook(url=webhook_url)
+    logger.info("telegram_webhook_set url=%s", webhook_url)
+    _register_reports(telegram_app)
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    global telegram_app, _telegram_task
+    settings = get_settings()
+    setup_logging(log_dir=settings.log_dir, retention_days=settings.log_retention_days)
+    Path(settings.generated_dir).mkdir(parents=True, exist_ok=True)
+
+    logger.info(
+        "startup env=%s db=%s@%s:%s model=%s telegram_mode=%s",
+        settings.app_env,
+        settings.db_name,
+        settings.db_host,
+        settings.db_port,
+        settings.gemini_model,
+        settings.telegram_mode,
+    )
+
+    # Start Telegram in background so Railway healthcheck on /health succeeds immediately
+    _telegram_task = asyncio.create_task(_start_telegram())
 
     yield
 
     logger.info("shutdown_begin")
+    if _telegram_task and not _telegram_task.done():
+        _telegram_task.cancel()
+        try:
+            await _telegram_task
+        except asyncio.CancelledError:
+            pass
     if telegram_app:
         try:
             if settings.telegram_mode == "polling" and telegram_app.updater:
@@ -106,8 +135,10 @@ def health():
         "status": "ok",
         "env": settings.app_env,
         "db": settings.db_name,
+        "db_host": settings.db_host,
         "model": settings.gemini_model,
         "telegram_mode": settings.telegram_mode,
+        "telegram_ready": telegram_app is not None,
     }
 
 

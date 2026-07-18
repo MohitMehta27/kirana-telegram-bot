@@ -49,8 +49,12 @@ class Settings(BaseSettings):
 
     @property
     def database_url(self) -> str:
+        from urllib.parse import quote_plus
+
+        user = quote_plus(self.db_user)
+        password = quote_plus(self.db_password)
         return (
-            f"mysql+pymysql://{self.db_user}:{self.db_password}"
+            f"mysql+pymysql://{user}:{password}"
             f"@{self.db_host}:{self.db_port}/{self.db_name}?charset=utf8mb4"
         )
 
