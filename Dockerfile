@@ -18,7 +18,6 @@ RUN pip install --upgrade pip && pip install -r requirements.txt
 
 COPY . .
 
-RUN chmod +x start.sh
-
-# Railway injects PORT; shell expands it (never pass literal $PORT to uvicorn)
-CMD ["./start.sh"]
+# Railway injects PORT at runtime; sh -c expands ${PORT} (never pass literal $PORT to uvicorn).
+# Using inline shell form avoids CRLF issues from a checked-in .sh script on Windows.
+CMD ["sh", "-c", "uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000}"]
