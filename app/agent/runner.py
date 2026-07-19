@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from datetime import datetime
 from typing import Any
 
 from google import genai
@@ -43,7 +44,7 @@ Rules:
 - After you finalize a bill, ALSO call generate_invoice_pdf for that bill_id in the SAME turn so the owner gets the invoice automatically (unless they explicitly said no PDF).
 - If the owner says "bill", "invoice", "paid", "give me the bill" right after a sale, generate the invoice PDF for the most recent bill instead of asking.
 - For "send bill as PDF" call generate_invoice_pdf (finalize first if still a draft the owner confirmed).
-- For "sales analysis deck / this week's report" call generate_analysis_deck.
+- For "sales analysis deck / this week's report" call generate_analysis_deck. For relative ranges ("this week", "last 7 days", "weekly"), call it with NO start_date/end_date — the server defaults to the last 7 days ending today. Only pass explicit dates if the owner names specific calendar dates, and then use the CURRENT year shown above.
 - For "today's sales" use today_sales_summary; for "close the day" use close_day.
 - Auto reports (start/activate/stop/deactivate — all four words mean the same):
   * "start daily report" / "activate daily report" WITHOUT a time -> ASK "At what time (IST) should I send the daily report?" and do nothing else this turn. Once the owner gives a time -> set_preference(daily_report_time, "HH:MM").
@@ -57,9 +58,32 @@ Rules:
 """
 
 
+def _now_line() -> str:
+    """Current date/time in the shop timezone so the agent has temporal awareness."""
+    settings = get_settings()
+    try:
+        from zoneinfo import ZoneInfo
+
+        now = datetime.now(ZoneInfo(settings.report_timezone))
+        tz = settings.report_timezone
+    except Exception:
+        now = datetime.now()
+        tz = "local"
+    return (
+        f"Current date/time ({tz}): {now.strftime('%Y-%m-%d %H:%M')} "
+        f"({now.strftime('%A')}). Use THIS year for any date math; never assume a past year."
+    )
+
+
 def _system_with_prefs(prefs: dict[str, str]) -> str:
     pref_lines = "\n".join(f"- {k}: {v}" for k, v in prefs.items()) or "- (none yet)"
-    return SYSTEM_PROMPT + "\n\nDurable preferences for this owner:\n" + pref_lines
+    return (
+        SYSTEM_PROMPT
+        + "\n\n"
+        + _now_line()
+        + "\n\nDurable preferences for this owner:\n"
+        + pref_lines
+    )
 
 
 def run_agent(
