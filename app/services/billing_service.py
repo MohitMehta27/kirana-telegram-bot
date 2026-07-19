@@ -172,15 +172,18 @@ def get_bill_summary(db: Session, bill_id: int) -> dict[str, Any]:
             customer_name = cust.name
             customer_phone = cust.phone
     lines = []
+    text_lines = []
     for it in bill.items:
         p = db.get(Product, it.product_id)
+        name = p.sku_name if p else str(it.product_id)
+        unit = p.unit if p else ""
         lines.append(
             {
                 "product_id": it.product_id,
-                "sku_name": p.sku_name if p else str(it.product_id),
+                "sku_name": name,
                 "hsn_code": p.hsn_code if p else "",
                 "qty": float(it.qty),
-                "unit": p.unit if p else "",
+                "unit": unit,
                 "unit_price": float(it.unit_price),
                 "gst_rate": float(it.gst_rate),
                 "cgst": float(it.cgst_amount),
@@ -188,6 +191,19 @@ def get_bill_summary(db: Session, bill_id: int) -> dict[str, Any]:
                 "line_total": float(it.line_total),
             }
         )
+        qty_str = f"{Decimal(it.qty).normalize():f}"
+        text_lines.append(f"- {name} x{qty_str}{(' ' + unit) if unit else ''} = ₹{_money(it.line_total)}")
+
+    # Deterministic summary the agent can echo VERBATIM (LLMs mis-transcribe numbers).
+    header = f"Bill #{bill.id} ({bill.status})"
+    body = "\n".join(text_lines) if text_lines else "(no items)"
+    summary_text = (
+        f"{header}\n{body}\n"
+        f"Subtotal ₹{_money(bill.subtotal)} | CGST ₹{_money(bill.cgst_total)} | "
+        f"SGST ₹{_money(bill.sgst_total)}\n"
+        f"Total ₹{_money(bill.grand_total)}"
+    )
+
     return {
         "ok": True,
         "bill_id": bill.id,
@@ -203,6 +219,7 @@ def get_bill_summary(db: Session, bill_id: int) -> dict[str, Any]:
         "cgst_total": float(bill.cgst_total),
         "sgst_total": float(bill.sgst_total),
         "grand_total": float(bill.grand_total),
+        "summary_text": summary_text,
     }
 
 
