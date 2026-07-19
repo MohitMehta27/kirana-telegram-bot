@@ -153,7 +153,11 @@ def set_bill_payment(
         return {"ok": False, "error": "payment mode must be cash|upi|card|khata"}
     bill.payment_mode = mode
     bill.payment_ref = ref
-    bill.customer_id = customer_id if mode == "khata" else None
+    # Customer is optional for cash/upi/card (walk-in) and only attached when the owner
+    # names one; it is mandatory for khata (enforced in finalize_bill). Never wipe an
+    # already-attached customer just because the mode isn't khata.
+    if customer_id is not None:
+        bill.customer_id = customer_id
     db.commit()
     return get_bill_summary(db, bill_id)
 
