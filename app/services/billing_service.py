@@ -354,6 +354,9 @@ def _recompute_line(item: BillItem, unit_price: Decimal, gst_rate: Decimal) -> N
 
 
 def _recompute_bill_totals(db: Session, bill: Bill) -> None:
+    # Session uses autoflush=False, so push pending add/delete to the DB first,
+    # otherwise this SELECT sees the pre-operation item set and totals lag by one step.
+    db.flush()
     items = db.scalars(select(BillItem).where(BillItem.bill_id == bill.id)).all()
     subtotal = sum((Decimal(i.taxable_amt) for i in items), Decimal("0"))
     cgst = sum((Decimal(i.cgst_amount) for i in items), Decimal("0"))
